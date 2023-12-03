@@ -1,0 +1,10 @@
+version: '3.2'
+services:
+  qwitter-service-db:
+    container_name: pear-discovery-database
+    image: mcr.microsoft.com/mssql/server:2019-latest
+    ports:
+      - '1433:1433'
+    environment:
+      SA_PASSWORD: 'p@ssword!securePlease'
+      ACCEPT_EULA: 'Y'
