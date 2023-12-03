@@ -1,0 +1,126 @@
+﻿@page "/KeyManager"
+@using System.Security.Cryptography;
+@using System.Text.Json;
+@using Pear.Client.Models
+@using Pear.Client.Services;
+@using System.Text
+
+<h3>Key Manager</h3>
+
+<div class="container">
+    <div class="row">&nbsp;</div>
+    <div class="row">
+        <div class="col-2">Create new key</div>
+        <div class="col-3"><input required placeholder="Key name .." @bind="@_newKeyName" /></div>
+        <div class="col-3"><button class="btn btn-primary" @onclick="CreateKey">Submit</button></div>
+    </div>
+    <div class="row">&nbsp;</div>
+    <div class="row">
+        <div class="text-danger col-4">@_errorMessage</div>
+    </div>
+    <div class="row">&nbsp;</div>
+    <div class="row">&nbsp;</div>
+    <div class="row">
+        <ul>
+            @if (_keys.Count() == 0)
+            {
+                <p>You have no keys...</p>
+            }
+            else
+            {
+                <table class="table">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Public Key</th>
+                            <th>Is Discovered</th>
+                            <th>Edit</th>
+                            <th>Delete</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var key in _keys)
+                        {
+                            <tr>
+                                @if (key.IsInEditMode)
+                                {
+                                    <td><input @bind="key.Name" /></td>
+                                }
+                                else
+                                {
+                                    <td contenteditable="false">@key.Name</td>
+                                }
+                                <td>@key.KeyPair.PublicKey.Substring(0, 10)</td>
+                                <td>@key.IsDiscovered</td>
+                                @if (key.IsInEditMode)
+                                {
+                                    <td><button class="btn btn-success" @onclick="(() => SaveKey(key))">Save key</button></td>
+                                }
+                                else
+                                {
+                                    <td><button class="btn btn-warning" @onclick="(() => EditKey(key))">Edit key</button></td>
+                                }
+                                <td><button class="btn btn-danger" @onclick="(() => DeleteOneKey(key.KeyPair.PublicKey))">Delete key</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </ul>
+    </div>
+</div>
+
+@code {
+    private List<KeyContent> _keys = new List<KeyContent>();
+    private string _newKeyName = string.Empty;
+    private string _errorMessage = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _keys.Clear();
+        var keys = await KeyManagerService.GetKeyContents();
+        if (keys is not null)
+            _keys = keys;
+    }
+
+    private async Task CreateKey()
+    {
+        if (String.IsNullOrWhiteSpace(_newKeyName))
+        {
+            _errorMessage = "Key name cannot be empty";
+            return;
+        }
+        _errorMessage = string.Empty;
+
+        var keyPair = CryptoService.GenerateKeyPair();
+
+        _keys.Add(new KeyContent
+            {
+                Name = _newKeyName,
+                KeyPair = keyPair
+            });
+
+        await KeyManagerService.SaveKeys(_keys);
+        _newKeyName = string.Empty;
+    }
+
+    private async Task DeleteOneKey(string publicKey)
+    {
+        var key = _keys.SingleOrDefault(p => p.KeyPair.PublicKey == publicKey);
+        if (key is not null)
+            _keys.Remove(key);
+
+        await KeyManagerService.SaveKeys(_keys);
+    }
+
+    private void EditKey(KeyContent key)
+    {
+        key.IsInEditMode = true;
+    }
+
+    private async Task SaveKey(KeyContent key)
+    {
+        key.IsInEditMode = false;
+        await KeyManagerService.SaveKeys(_keys);
+    }
+}

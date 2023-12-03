@@ -1,0 +1,205 @@
+﻿@page "/Chat"
+
+@using Pear.Client.Models;
+@using Pear.Client.Repositories;
+@using Pear.Client.Services;
+@using System.Text.Json;
+@using Microsoft.AspNetCore.SignalR.Client;
+
+@inject PearFriendsRepository PearFriendsRepo;
+
+<div class="col-3"><button class="btn btn-primary" @onclick="Connect">Connect</button></div>
+<br />
+<div class="container">
+    <div class="row">&nbsp;</div>
+    <div class="row">
+        <div class="col-2">Add friend</div>
+        <div class="col-3"><input placeholder="Name..." @bind="@_addPearName" /></div>
+        <div class="col-3"><button class="btn btn-primary" @onclick="AddPear">Add</button></div>
+    </div>
+</div>
+
+<p>@_statusMessage</p>
+
+<h3>Chat</h3>
+@if (_keys.Count() == 0)
+{
+    <p>You need to create keys to chat...</p>
+}
+else
+{
+    <select @bind="_selectedPublicKey">
+        <option value="">--select a key--</option>
+        @foreach (var key in _keys)
+        {
+            <option value=@key.KeyPair.PublicKey>@key.Name</option>
+        }
+    </select>
+
+    if (!string.IsNullOrEmpty(_selectedPublicKey))
+    {
+        <p>Selected Key: @_selectedPublicKey.Substring(0, 10)</p>
+    }
+
+    <div class="row">&nbsp;</div>
+
+    <select @bind="_selectedFriendPublicKey">
+        <option value="">--select a friend--</option>
+        @foreach (var friend in _pearFriends)
+        {
+            <option value=@friend.PublicKey>@friend.Name</option>
+        }
+    </select>
+
+    @if (!string.IsNullOrEmpty(_selectedFriendPublicKey))
+    {
+        <p>Friend public key: @_selectedFriendPublicKey.Substring(0, 10)</p>
+    }
+
+    <div class="container">
+        <div class="row">&nbsp;</div>
+        <div class="row">
+            <div class="col-3"><input placeholder="Message..." @bind="@_messageToSend" /></div>
+            <div class="col-3"><button class="btn btn-primary" @onclick="SendMessage">Send</button></div>
+        </div>
+    </div>
+
+    @foreach(var message in _pearMessages)
+    {
+        <p>From: @message.SenderPublicKey.Substring(0,10) To: @message.RecipientPublicKey.Substring(0, 10) Message: @message.Content</p>
+    }
+
+
+}
+
+@code {
+    private HubConnection _hubConnection;
+    private readonly string _discoveryHubUrl = "http://localhost:5260/main";
+
+    private HttpClient _httpClient;
+    private List<KeyContent> _keys = new List<KeyContent>();
+    private List<PearFriend> _pearFriends = new List<PearFriend>();
+
+    private List<PearMessage> _pearMessages = new List<PearMessage>();
+
+    private string _selectedPublicKey = string.Empty;
+    private string _addPearName = string.Empty;
+
+    private string _selectedFriendPublicKey = string.Empty;
+    private string _messageToSend = string.Empty;
+
+
+    private string _statusMessage = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _keys.Clear();
+        _pearFriends.Clear();
+        _pearFriends = PearFriendsRepo.GetAll();
+        var keys = await KeyManagerService.GetKeyContents();
+        if (keys is not null)
+            _keys = keys;
+
+        _httpClient = new HttpClient
+        {
+            BaseAddress = new Uri("http://localhost:5260/api/")
+        };
+    }
+
+    public async Task Connect()
+    {
+        if (String.IsNullOrWhiteSpace(_selectedPublicKey))
+        {
+            _statusMessage = "You need to select a key to connect";
+            ClearStatusMessage();
+            return;
+        }
+        _hubConnection = new HubConnectionBuilder()
+        .WithUrl(_discoveryHubUrl, options =>
+        {
+            options.Headers = new Dictionary<string, string>
+                {
+                        { "publicKey", _selectedPublicKey }
+                };
+        })
+        .Build();
+
+        _hubConnection.On<string, string, string>("ReceiveMessage", (senderPublicKey, message, signature) =>
+        {
+            var key = _keys.SingleOrDefault(p => p.KeyPair.PublicKey == _selectedPublicKey);
+            var encryptedMessage = new EncryptedMessage
+            {
+                SenderPublicKey = senderPublicKey,
+                RecipientPublicKey = _selectedPublicKey,
+                Cipher = message,
+                Signature = signature
+            };
+            var isValid = CryptoService.DecryptMessage(encryptedMessage, key.KeyPair.PrivateKey, out string decryptedMessage);
+            _pearMessages.Add(new PearMessage
+                {
+                    SenderPublicKey = senderPublicKey,
+                    RecipientPublicKey = _selectedPublicKey,
+                    Content = decryptedMessage
+                });
+            InvokeAsync(StateHasChanged);
+        });
+        await _hubConnection.StartAsync();
+    }
+
+    public async Task AddPear()
+    {
+        if (_addPearName == string.Empty)
+        {
+            _statusMessage = "You need to enter a name to add a friend";
+            ClearStatusMessage();
+            return;
+        }
+        try
+        {
+            var response = await _httpClient.GetFromJsonAsync<PearFriend>($"Discovery/{_addPearName}");
+            if (response is null)
+            {
+                _statusMessage = "Username not found";
+                ClearStatusMessage();
+                return;
+            }
+            PearFriendsRepo.Add(response);
+        }
+        catch (HttpRequestException ex)
+        {
+            _statusMessage = ex.Message;
+            ClearStatusMessage();
+            return;
+        };
+
+        _statusMessage = string.Empty;
+        _addPearName = string.Empty;
+        _pearFriends = PearFriendsRepo.GetAll();
+    }
+
+    public async Task SendMessage()
+    {
+        var key = _keys.FirstOrDefault(k => k.KeyPair.PublicKey == _selectedPublicKey);
+        var encryptedMessage = CryptoService.EncryptMessage(key.KeyPair, _messageToSend, _selectedFriendPublicKey);
+        await _hubConnection.SendAsync("SendMessage", _selectedPublicKey, _selectedFriendPublicKey, encryptedMessage.Cipher, encryptedMessage.Signature);
+        _pearMessages.Add(new PearMessage
+        {
+            SenderPublicKey = _selectedPublicKey,
+            RecipientPublicKey = _selectedFriendPublicKey,
+            Content = _messageToSend
+        });
+    }
+
+    public void DeleteFriend(int id)
+    {
+        PearFriendsRepo.Delete(id);
+        _pearFriends = PearFriendsRepo.GetAll();
+    }
+
+    public async void ClearStatusMessage()
+    {
+        await Task.Delay(5000);
+        _statusMessage = string.Empty;
+        await InvokeAsync(StateHasChanged);
+    }
+}

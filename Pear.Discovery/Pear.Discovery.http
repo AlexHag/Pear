@@ -1,0 +1,6 @@
+@Pear.Discovery_HostAddress = http://localhost:5260
+
+GET {{Pear.Discovery_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###

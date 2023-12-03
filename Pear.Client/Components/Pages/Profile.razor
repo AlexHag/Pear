@@ -1,0 +1,142 @@
+﻿@page "/Profile"
+
+@using Pear.Client.Models;
+@using Pear.Client.Repositories;
+@using Pear.Client.Services;
+@using System.Text.Json;
+@using Microsoft.AspNetCore.SignalR.Client;
+@using System.Text
+
+<h3>Profile</h3>
+
+@if (_keys.Count() == 0)
+{
+    <p>You need to create keys to chat...</p>
+}
+else
+{
+    <select @bind="_selectedPublicKey">
+        <option value="">--select a key--</option>
+        @foreach (var key in _keys)
+        {
+            <option value=@key.KeyPair.PublicKey>@key.Name</option>
+        }
+    </select>
+    
+    <div>&nbsp;</div>
+    <div class="col-3"><button class="btn btn-primary" @onclick="PublishKey">Publish Public Key for Discovery</button></div>
+    <div>&nbsp;</div>
+
+    if (!string.IsNullOrEmpty(_statusMessage))
+    {
+        <p>@_statusMessage</p>
+    }
+
+    @if (!string.IsNullOrEmpty(_selectedPublicKey))
+    {
+        <p>@_selectedPublicKey.Substring(0, 10)</p>
+    }
+}
+
+@foreach (var message in _messages)
+{
+    <p>@message</p>
+}
+
+@code {
+    private HttpClient _httpClient;
+
+    private HubConnection _hubConnection;
+    private readonly string _discoveryHubUrl = "http://localhost:5260/chatHub";
+
+    private List<string> _messages = new List<string>();
+
+    private List<KeyContent> _keys = new List<KeyContent>();
+    private string _selectedPublicKey = string.Empty;
+    private string _statusMessage = string.Empty;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _keys.Clear();
+        var keys = await KeyManagerService.GetKeyContents();
+        if (keys is not null)
+            _keys = keys;
+
+        _httpClient = new HttpClient
+        {
+            BaseAddress = new Uri("http://localhost:5260/api/")
+        };
+
+        // _hubConnection = new HubConnectionBuilder()
+        //     .WithUrl(_discoveryHubUrl)
+        //     .Build();
+
+        // _hubConnection.On<string, string>("ReceiveMessage", (user, message) =>
+        // {
+        //     _messages.Add($"{user} : {message}");
+        //     InvokeAsync(StateHasChanged);
+        // });
+
+        // await _hubConnection.StartAsync();
+    }
+
+    public async Task PublishKey()
+    {
+        if (string.IsNullOrEmpty(_selectedPublicKey))
+        {
+            _statusMessage = "You need to select a key to publish";
+            ClearStatusMessage();
+            return;
+        }
+        var key = _keys.FirstOrDefault(k => k.KeyPair.PublicKey == _selectedPublicKey);
+        if (key is null)
+        {
+            _statusMessage = "Could not find key";
+            ClearStatusMessage();
+            return;
+        }
+        if (key.IsDiscovered)
+        {
+            _statusMessage = "Key already published";
+            ClearStatusMessage();
+            return;
+        }
+
+        using StringContent jsonContent = new(
+        JsonSerializer.Serialize(new
+        {
+            name = key.Name,
+            publicKey = key.KeyPair.PublicKey
+        }),
+        Encoding.UTF8,
+        "application/json");
+
+        using HttpResponseMessage response = await _httpClient.PostAsync(
+            "Discovery",
+            jsonContent);
+
+        try
+        {
+            response.EnsureSuccessStatusCode();
+        }
+        catch (HttpRequestException ex)
+        {
+            _statusMessage = ex.Message;
+            ClearStatusMessage();
+            return;
+        }
+        key.IsDiscovered = true;
+        await KeyManagerService.SaveKeys(_keys);
+
+        _statusMessage = "Key published";
+        ClearStatusMessage();
+    }
+
+    public async void ClearStatusMessage()
+    {
+        await Task.Delay(5000);
+        _statusMessage = string.Empty;
+        await InvokeAsync(StateHasChanged);
+    }
+}
+
